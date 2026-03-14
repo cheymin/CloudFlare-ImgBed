@@ -2,18 +2,16 @@ import { S3Client, CopyObjectCommand, DeleteObjectCommand } from "@aws-sdk/clien
 import { purgeCFCache, purgeRandomFileListCache, purgePublicFileListCache } from "../../../utils/purgeCache";
 import { moveFileInIndex, batchMoveFilesInIndex } from "../../../utils/indexManager.js";
 import { getDatabase } from '../../../utils/databaseAdapter.js';
+import { sanitizeUploadFolder } from "../../../upload/uploadTools.js";
 
 export async function onRequest(context) {
     const { request, env, params, waitUntil } = context;
 
     const url = new URL(request.url);
 
-    // 读取目标文件夹
-    const dist = url.searchParams.get('dist')
-        ? url.searchParams.get('dist').replace(/^\/+/, '')
-            .replace(/\/{2,}/g, '/')
-            .replace(/\/$/, '')
-        : '';
+    // 读取目标文件夹，并进行路径安全处理
+    const rawDist = url.searchParams.get('dist') || '';
+    const dist = sanitizeUploadFolder(rawDist);
 
     // 读取folder参数，判断是否为文件夹移动请求
     const folder = url.searchParams.get('folder');
@@ -35,7 +33,9 @@ export async function onRequest(context) {
 
                 // 获取指定目录下的所有文件
                 const listUrl = new URL(`${url.origin}/api/manage/list?count=-1&dir=${currentFolder.path}`);
-                const listRequest = new Request(listUrl, request);
+                const listRequest = new Request(listUrl, {
+                    headers: request.headers,
+                });
                 const listResponse = await fetch(listRequest);
                 const listData = await listResponse.json();
 

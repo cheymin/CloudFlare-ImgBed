@@ -1,5 +1,5 @@
 /* ========== 分块合并处理 ========== */
-import { createResponse, getUploadIp, getIPAddress, selectConsistentChannel, buildUniqueFileId, endUpload } from './uploadTools';
+import { createResponse, getUploadIp, getIPAddress, selectConsistentChannel, buildUniqueFileId, endUpload, sanitizeUploadFolder } from './uploadTools';
 import { retryFailedChunks, cleanupFailedMultipartUploads, checkChunkUploadStatuses, cleanupChunkData, cleanupUploadSession } from './chunkUpload';
 import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
@@ -141,7 +141,7 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
         // 获得上传IP
         const uploadIp = getUploadIp(request);
 
-        const normalizedFolder = (url.searchParams.get('uploadFolder') || '').replace(/^\/+/, '').replace(/\/{2,}/g, '/').replace(/\/$/, '');
+        const normalizedFolder = sanitizeUploadFolder(url.searchParams.get('uploadFolder') || '');
 
         // 构建基础metadata
         const metadata = {
@@ -462,10 +462,7 @@ async function mergeTelegramChunksInfo(context, uploadId, completedChunks, metad
         metadata.ChannelName = tgChannel.name;
         metadata.TgChatId = tgChatId;
         metadata.TgBotToken = tgBotToken;
-        // 保存代理域名配置（如果有）
-        if (tgChannel.proxyUrl) {
-            metadata.TgProxyUrl = tgChannel.proxyUrl;
-        }
+        metadata.TgProxyUrl = tgChannel.proxyUrl || '';
         metadata.IsChunked = true;
         metadata.TotalChunks = completedChunks.length;
         metadata.FileSize = (totalSize / 1024 / 1024).toFixed(2);

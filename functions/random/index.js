@@ -1,5 +1,14 @@
 import { fetchOthersConfig } from "../utils/sysConfig";
 import { readIndex } from "../utils/indexManager";
+import { detectDevice, resolveOrientation, addClientHintsHeaders } from "./adaptive.js";
+
+// CORS 跨域响应头
+const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Max-Age': '86400',
+};
 
 let othersConfig = {};
 let allowRandom = false;
@@ -16,6 +25,11 @@ export async function onRequest(context) {
     } = context;
     const requestUrl = new URL(request.url);
 
+    // 处理 OPTIONS 预检请求
+    if (request.method === 'OPTIONS') {
+        return new Response(null, { headers: corsHeaders });
+    }
+
     // 读取其他设置
     othersConfig = await fetchOthersConfig(env);
     allowRandom = othersConfig.randomImageAPI.enabled;
@@ -23,7 +37,7 @@ export async function onRequest(context) {
 
     // 检查是否启用了随机图功能
     if (allowRandom != true) {
-        return new Response(JSON.stringify({ error: "Random is disabled" }), { status: 403 });
+        return new Response(JSON.stringify({ error: "Random is disabled" }), { status: 403, headers: corsHeaders });
     }
 
     // 处理允许的目录，每个目录调整为标准格式，去掉首尾空格，去掉开头的/，替换多个连续的/为单个/，去掉末尾的/
@@ -40,8 +54,24 @@ export async function onRequest(context) {
         fileType = fileType.split(',');
     }
 
-    // 读取图片方向参数：landscape(横图), portrait(竖图), square(方图)
-    const orientation = requestUrl.searchParams.get('orientation') || '';
+    // 读取图片方向参数：landscape(横图), portrait(竖图), square(方图), auto(自适应)
+    const orientationParam = requestUrl.searchParams.get('orientation') || '';
+
+    // 根据参数值决定行为
+    const VALID_ORIENTATIONS = ['landscape', 'portrait', 'square'];
+    let orientation = '';
+    let isAutoMode = false;
+
+    if (VALID_ORIENTATIONS.includes(orientationParam)) {
+        // 手动指定有效方向，直接使用
+        orientation = orientationParam;
+    } else if (orientationParam === 'auto') {
+        // 自适应模式：检测设备并自动决策
+        isAutoMode = true;
+        const deviceInfo = detectDevice(request);
+        orientation = resolveOrientation(deviceInfo);
+    }
+    // 其他情况（未指定或无效值）：orientation 保持空字符串，不过滤
 
     // 读取指定文件夹
     const paramDir = requestUrl.searchParams.get('dir') || '';
@@ -56,7 +86,7 @@ export async function onRequest(context) {
         }
     }
     if (!dirAllowed) {
-        return new Response(JSON.stringify({ error: "Directory not allowed" }), { status: 403 });
+        return new Response(JSON.stringify({ error: "Directory not allowed" }), { status: 403, headers: corsHeaders });
     }
 
     // 调用randomFileList接口，读取KV数据库中的所有记录
@@ -64,6 +94,9 @@ export async function onRequest(context) {
 
     // 筛选出符合fileType要求的记录
     allRecords = allRecords.filter(item => { return fileType.some(type => item.FileType?.includes(type)) });
+
+    // 保存过滤前的记录，用于自适应模式降级
+    const allRecordsBeforeOrientationFilter = allRecords;
 
     // 根据图片方向筛选
     if (orientation && allRecords.length > 0) {
@@ -86,9 +119,19 @@ export async function onRequest(context) {
         });
     }
 
+    // 自适应模式降级：过滤后无匹配图片时，降级到全部图片
+    if (isAutoMode && orientation && allRecords.length === 0) {
+        allRecords = allRecordsBeforeOrientationFilter;
+    }
+
+    // 构建响应头：添加 CORS 跨域响应头，自适应模式下添加 Client Hints 协商头
+    const responseHeaders = new Headers(corsHeaders);
+    if (isAutoMode) {
+        addClientHintsHeaders(responseHeaders);
+    }
 
     if (allRecords.length == 0) {
-        return new Response(JSON.stringify({}), { status: 200 });
+        return new Response(JSON.stringify({}), { status: 200, headers: responseHeaders });
     } else {
         const randomIndex = Math.floor(Math.random() * allRecords.length);
         const randomKey = allRecords[randomIndex];
@@ -108,19 +151,23 @@ export async function onRequest(context) {
             // Return an image response
             randomUrl = requestUrl.origin + randomPath;
             let contentType = 'image/jpeg';
+            const imgHeaders = new Headers(responseHeaders);
             return new Response(await fetch(randomUrl).then(res => {
                 contentType = res.headers.get('content-type');
                 return res.blob();
             }), {
-                headers: contentType ? { 'Content-Type': contentType } : { 'Content-Type': 'image/jpeg' },
+                headers: (() => {
+                    imgHeaders.set('Content-Type', contentType || 'image/jpeg');
+                    return imgHeaders;
+                })(),
                 status: 200
             });
         }
         
         if (resType == 'text') {
-            return new Response(randomUrl, { status: 200 });
+            return new Response(randomUrl, { status: 200, headers: responseHeaders });
         } else {
-            return new Response(JSON.stringify({ url: randomUrl }), { status: 200 });
+            return new Response(JSON.stringify({ url: randomUrl }), { status: 200, headers: responseHeaders });
         }
     }
 }
