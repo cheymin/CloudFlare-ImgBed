@@ -27,24 +27,26 @@
  *                      KV Read 降低99%
  */
 // /functions/_middleware.js
+// 针对大文件的智能缓存
 export async function onRequest(context) {
-  const { request, next } = context;
-  
-  // 1. 先执行原有逻辑
-  const response = await next();
-  
-  // 2. 如果是图片且成功，添加缓存头
+  const response = await context.next();
   const contentType = response.headers.get('content-type') || '';
-  if (response.status === 200 && contentType.startsWith('image/')) {
-    const newHeaders = new Headers(response.headers);
-    newHeaders.set('Cache-Control', 'public, max-age=86400'); // 1天
-    newHeaders.set('CDN-Cache-Control', 'public, max-age=86400');
-    
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: newHeaders
-    });
+  const fileSize = response.headers.get('content-length') || 0;
+  
+  // 根据不同文件类型设置不同缓存策略
+  if (contentType.startsWith('video/') || fileSize > 100 * 1024 * 1024) {
+    // 大视频：缓存30天，允许断点续传
+    const headers = new Headers(response.headers);
+    headers.set('Cache-Control', 'public, max-age=2592000');
+    headers.set('Accept-Ranges', 'bytes');  // 支持断点续传
+    return new Response(response.body, { headers });
+  }
+  
+  if (contentType.startsWith('image/')) {
+    // 图片：缓存7天
+    const headers = new Headers(response.headers);
+    headers.set('Cache-Control', 'public, max-age=604800');
+    return new Response(response.body, { headers });
   }
   
   return response;
