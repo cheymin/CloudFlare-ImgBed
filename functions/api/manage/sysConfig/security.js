@@ -1,6 +1,6 @@
 import { getDatabase } from '../../../utils/databaseAdapter.js';
-import { hashPassword, isHashed } from '../../../utils/passwordHash.js';
-import { destroySessionsByAuthType } from '../../../utils/sessionManager.js';
+import { hashPassword, isHashed } from '../../../utils/auth/passwordHash.js';
+import { destroySessionsByAuthType } from '../../../utils/auth/sessionManager.js';
 
 export async function onRequest(context) {
     // 安全设置相关，GET方法读取设置，POST方法保存设置
@@ -160,6 +160,10 @@ export async function getSecurityConfig(db, env) {
     const access = {
         allowedDomains: kvAccess.allowedDomains || env.ALLOWED_DOMAINS || '',
         whiteListMode: kvAccess.whiteListMode ?? env.WhiteList_Mode === 'true',
+        // 新增会话安全策略字段
+        sessionSecure: kvAccess.sessionSecure ?? false,
+        userSessionMaxAge: kvAccess.userSessionMaxAge ?? 14,
+        adminSessionMaxAge: kvAccess.adminSessionMaxAge ?? 14,
     }
     settings.access = access
 
